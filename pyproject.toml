@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "openapi-bridge"
+version = "0.1.0"
+description = ""
+authors = ["Patrick Schemitz <ps@solute.de>", "Jonathan Oberländer <jo@solute.de>"]
+readme = "README.md"
+packages = [{include = "openapi_bridge"}]
+license = "Apache-2.0"
+repository = "https://github.com/solute/openapi-bridge"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pydantic = "^1.10.7"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
