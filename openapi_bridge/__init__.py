@@ -1,7 +1,7 @@
 # pylint: disable=c-extension-no-member, too-many-locals, too-many-branches, no-else-return
 import ast
-import datetime
 import decimal
+import datetime
 import enum
 import functools
 import inspect
@@ -263,18 +263,10 @@ class endpoint:
         fqname = f"{fn.__module__}.{fn.__name__}"
         spec = inspect.getfullargspec(fn)
         returns = spec.annotations["return"]
-        assert (
-            not spec.varargs
-        ), "*args is not supported on endpoints (because they can't be annotated)"
-        assert (
-            not spec.varkw
-        ), "**kwargs is not supported on endpoints (because they can't be annotated)"
-        assert set(spec.args) <= {
-            "user"
-        }, "all params except 'user' must be keyword-only"  # magic connexion params
-        assert docs["response"].get("200") or issubclass(
-            returns, pydantic.BaseModel
-        ), "if you don't return a pydantic model, you need to document the @response 200"
+        assert not spec.varargs, "*args is not supported on endpoints (because they can't be annotated)"
+        assert not spec.varkw, "**kwargs is not supported on endpoints (because they can't be annotated)"
+        assert set(spec.args) <= {"user"}, "all params except 'user' must be keyword-only"  # magic connexion params
+        assert docs["response"].get("200") or issubclass(returns, pydantic.BaseModel), "if you don't return a pydantic model, you need to document the @response 200"
         return_reference = f"#/components/schemas/{returns.__name__}"
         for arg in spec.kwonlyargs:
             annotation = spec.annotations[arg]
@@ -325,13 +317,12 @@ class endpoint:
                             },
                         },
                     }
-                request_body["content"]["multipart/form-data"]["schema"]["properties"][arg] = {
-                    "description": docs["param"][arg],
-                    **param["schema"],
-                }
+                request_body["content"]["multipart/form-data"]["schema"]["properties"][arg] = {"description": docs["param"][arg], **param["schema"]}
             else:
                 parameters.append(param)
-        PATHS.setdefault(self.path_prefix, {}).setdefault(self.path, {})[self.method] = {
+        PATHS.setdefault(self.path_prefix, {}).setdefault(self.path, {})[
+            self.method
+        ] = {
             "parameters": parameters,
             "summary": summary,
             "description": description,
@@ -355,10 +346,7 @@ class endpoint:
             result = fn(*args, **kwargs)
             if isinstance(result, returns):
                 if isinstance(result, pydantic.BaseModel):
-                    return (
-                        result.dict(by_alias=True, exclude_none=self.response_model_exclude_none),
-                        200,
-                    )
+                    return result.dict(by_alias=True, exclude_none=self.response_model_exclude_none), 200
                 else:
                     return result, 200
             return result
@@ -370,7 +358,9 @@ class endpoint:
         origin = typing.get_origin(annotation)
         if str(annotation).startswith("typing.Optional"):
             inner_type, _ = typing.get_args(annotation)
-            return self._get_schema(inner_type, default, in_, name=name, example=example)
+            return self._get_schema(
+                inner_type, default, in_, name=name, example=example
+            )
         elif str(annotation).startswith("typing.Annotated"):
             args = typing.get_args(annotation)
             assert len(args) == 2
@@ -403,14 +393,6 @@ class endpoint:
                 "type": "string",
                 "format": "date",
             }
-        elif origin is typing.Literal:
-            choices = typing.get_args(annotation)
-            types = {type(choice) for choice in choices}
-            assert len(types) == 1, f"Literal must have all the same types, but got {types}"
-            result = {
-                "type": self._get_schema(types.pop(), default=None, in_="query")["type"],
-                "enum": list(choices),
-            }
         elif origin is list:
             result = {
                 "type": "array",
@@ -425,28 +407,37 @@ class endpoint:
             if in_ == "path":
                 result["minItems"] = 1
                 result["maxItems"] = 100
-        elif issubclass(annotation, enum.Enum):
-            choices = list(annotation.__members__)
+        elif origin is typing.Literal:
+            choices = typing.get_args(annotation)
+            types = {type(choice) for choice in choices}
+            assert len(types) == 1, f"Literal must have all the same types, but got {types}"
             result = {
-                "type": "string",
+                "type": self._get_schema(types.pop(), default=None, in_="query")["type"],
                 "enum": list(choices),
             }
-        elif issubclass(annotation, pydantic.BaseModel):
-            result = {
-                "type": "object",
-                "properties": {
-                    name: self._get_schema(field.annotation, field.default, "query")
-                    for name, field in annotation.model_fields.items()
-                },
-            }
-            if annotation.model_config.get("extra") == "allow":
-                result["additionalProperties"] = self._get_schema(
-                    getattr(annotation, "__extra_type__", str),
-                    None,
-                    "query",
-                )
         elif isinstance(annotation, type):
-            raise ValueError(f"Unknown type {annotation} of parameter {name}")
+            if issubclass(annotation, enum.Enum):
+                choices = list(annotation.__members__)
+                result = {
+                    "type": "string",
+                    "enum": list(choices),
+                }
+            elif issubclass(annotation, pydantic.BaseModel):
+                result = {
+                    "type": "object",
+                    "properties": {
+                        name: self._get_schema(field.annotation, field.default, "query")
+                        for name, field in annotation.model_fields.items()
+                    },
+                }
+                if annotation.model_config.get("extra") == "allow":
+                    result["additionalProperties"] = self._get_schema(
+                        getattr(annotation, "__extra_type__", str),
+                        None,
+                        "query",
+                    )
+            else:
+                raise ValueError(f"Unknown type {annotation} of parameter {name}")
         else:
             raise ValueError(f"Unknown annotation {annotation} of parameter {name}")
 
@@ -501,7 +492,9 @@ def _parse_docstring(docstring):
     ----
     Private part 8===D
     """
-    docstring, *_private_docs = re.split(r"^\s*-{4,}$", docstring, flags=re.MULTILINE, maxsplit=1)
+    docstring, *_private_docs = re.split(
+        r"^\s*-{4,}$", docstring, flags=re.MULTILINE, maxsplit=1
+    )
     summary, *parts = re.split(r"@(\w+)", docstring)
     assert summary.startswith("\n"), "Docstrings need to break after opening quotes"
     summary = textwrap.dedent(summary)
