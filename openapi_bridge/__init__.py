@@ -1,7 +1,7 @@
 # pylint: disable=c-extension-no-member, too-many-locals, too-many-branches, no-else-return
 import ast
-import decimal
 import datetime
+import decimal
 import enum
 import functools
 import inspect
@@ -10,8 +10,9 @@ import textwrap
 import typing
 from itertools import zip_longest
 
+import annotated_types
 import pydantic
-
+import pydantic_core
 
 PATHS = {}
 
@@ -27,24 +28,82 @@ def get_pydantic_schemata(pydantic_model_module):
         ...
         schemas = solute_openapi_bridge.get_pydantic_schemata(_pydantic_models)
     """
-    schemata = []
+    schemata = {}
     for symbol in sorted(dir(pydantic_model_module)):
+        if symbol == "BaseModel" or symbol == "RootModel":
+            continue
         if symbol[0] != symbol[0].upper():
             continue  # skip non-uppercase symbols
-        if symbol == "BaseModel":
+        if symbol[0] == "_":  # skip private symbols
             continue
         attr = getattr(pydantic_model_module, symbol)
-        if getattr(attr, "__nodocs__", False):
+        if getattr(attr, "__nodocs__", False):  # do not include in specs
             continue
-        if isinstance(attr, pydantic.main.ModelMetaclass):
-            schemata.append(attr)
-    schemata = pydantic.schema.schema(schemata)
-    _patch_dict(schemata, "title", None)
-    _patch_dict(schemata, "$ref", _definitions_to_schemas)
-    return {"components": {"schemas": schemata["definitions"]}}
+        if isinstance(attr, pydantic._internal._model_construction.ModelMetaclass):
+            if attr is pydantic.main.BaseModel:
+                continue  # pure base models are not allowed
+            schema = attr.model_json_schema()
+            if schema.get("$defs") and symbol in schema["$defs"]:
+                schema = schema["$defs"][symbol]
+            else:
+                schema.pop("$defs", None)
+            _patch_dict(schema, "title", None)
+            _patch_dict(schema, "force", None)
+            _patch_dict(schema, "default", None, filter_null=True)
+            _patch_dict(schema, "$ref", _definitions_to_schemas)
+            _flatten_single(schema, "anyOf")
+            _replace_const(schema)
+            _remove_null_type(schema)
+            schemata[symbol] = schema
+            continue
+        if str(attr) == "<enum 'Enum'>":
+            continue  # pure enums are not allowed
+        if str(attr).startswith("<enum '"):
+            adapter = pydantic.TypeAdapter(attr)
+            schema = adapter.json_schema()
+            if "description" not in schema:
+                schema["description"] = "An enumeration."
+            _patch_dict(schema, "title", None)
+            schemata[symbol] = schema
+            continue
+    return {"components": {"schemas": schemata}}
 
 
-def _patch_dict(d, key, transform):
+def _flatten_single(d, key):
+    if isinstance(d, dict):
+        items = list(d.items())
+        for k, v in items:
+            if isinstance(v, (list, dict)) and key in v:
+                if isinstance(v[key], dict):
+                    d[k].update(v[key])
+                else:
+                    d[k].update(v[key][0])
+                d[k].pop(key, None)
+
+            elif isinstance(v, (dict, list)):
+                _flatten_single(v, key)
+    elif isinstance(d, list):
+        for v in d:
+            if isinstance(v, dict):
+                _flatten_single(v, key)
+
+
+def _replace_const(d):
+    if isinstance(d, dict):
+        items = list(d.items())
+        for k, v in items:
+            if k == "const":
+                d["enum"] = [v]
+                d.pop("const")
+            elif isinstance(v, (dict, list)):
+                _replace_const(v)
+    elif isinstance(d, list):
+        for v in d:
+            if isinstance(v, dict):
+                _replace_const(v)
+
+
+def _patch_dict(d, key, transform, filter_null=False):
     if isinstance(d, dict):
         for k, v in list(d.items()):  # so we can pop
             if isinstance(v, (dict, list)):
@@ -53,7 +112,11 @@ def _patch_dict(d, key, transform):
                 if transform:
                     d[k] = transform(v)
                 else:
-                    d.pop(k)
+                    if filter_null:
+                        if not d[k]:
+                            d.pop(k)
+                    else:
+                        d.pop(k)
     elif isinstance(d, list):
         for v in d:
             if isinstance(v, dict):
@@ -61,7 +124,27 @@ def _patch_dict(d, key, transform):
 
 
 def _definitions_to_schemas(ref):
-    return ref.replace("definitions/", "components/schemas/")
+    return ref.replace("definitions/", "components/schemas/").replace(
+        "$defs/", "components/schemas/"
+    )
+
+
+def _remove_null_type(d):
+    if isinstance(d, dict):
+        for k, v in list(d.items()):  # so we can pop
+            if isinstance(v, dict):
+                if v == {"type": "null"}:
+                    d.pop(k)
+                else:
+                    _remove_null_type(v)
+            if isinstance(v, list):
+                v = [i for i in v if i != {"type": "null"}]
+                _remove_null_type(v)
+                d[k] = v
+    elif isinstance(d, list):
+        for v in d:
+            if isinstance(v, dict):
+                _remove_null_type(v)
 
 
 class endpoint:
@@ -180,10 +263,18 @@ class endpoint:
         fqname = f"{fn.__module__}.{fn.__name__}"
         spec = inspect.getfullargspec(fn)
         returns = spec.annotations["return"]
-        assert not spec.varargs, "*args is not supported on endpoints (because they can't be annotated)"
-        assert not spec.varkw, "**kwargs is not supported on endpoints (because they can't be annotated)"
-        assert set(spec.args) <= {"user"}, "all params except 'user' must be keyword-only"  # magic connexion params
-        assert docs["response"].get("200") or issubclass(returns, pydantic.BaseModel), "if you don't return a pydantic model, you need to document the @response 200"
+        assert (
+            not spec.varargs
+        ), "*args is not supported on endpoints (because they can't be annotated)"
+        assert (
+            not spec.varkw
+        ), "**kwargs is not supported on endpoints (because they can't be annotated)"
+        assert set(spec.args) <= {
+            "user"
+        }, "all params except 'user' must be keyword-only"  # magic connexion params
+        assert docs["response"].get("200") or issubclass(
+            returns, pydantic.BaseModel
+        ), "if you don't return a pydantic model, you need to document the @response 200"
         return_reference = f"#/components/schemas/{returns.__name__}"
         for arg in spec.kwonlyargs:
             annotation = spec.annotations[arg]
@@ -234,12 +325,13 @@ class endpoint:
                             },
                         },
                     }
-                request_body["content"]["multipart/form-data"]["schema"]["properties"][arg] = {"description": docs["param"][arg], **param["schema"]}
+                request_body["content"]["multipart/form-data"]["schema"]["properties"][arg] = {
+                    "description": docs["param"][arg],
+                    **param["schema"],
+                }
             else:
                 parameters.append(param)
-        PATHS.setdefault(self.path_prefix, {}).setdefault(self.path, {})[
-            self.method
-        ] = {
+        PATHS.setdefault(self.path_prefix, {}).setdefault(self.path, {})[self.method] = {
             "parameters": parameters,
             "summary": summary,
             "description": description,
@@ -263,7 +355,10 @@ class endpoint:
             result = fn(*args, **kwargs)
             if isinstance(result, returns):
                 if isinstance(result, pydantic.BaseModel):
-                    return result.dict(by_alias=True, exclude_none=self.response_model_exclude_none), 200
+                    return (
+                        result.dict(by_alias=True, exclude_none=self.response_model_exclude_none),
+                        200,
+                    )
                 else:
                     return result, 200
             return result
@@ -271,12 +366,18 @@ class endpoint:
         return wrapper
 
     def _get_schema(self, annotation, default, in_, name=None, example=None):
+        constraints = None
         origin = typing.get_origin(annotation)
         if str(annotation).startswith("typing.Optional"):
             inner_type, _ = typing.get_args(annotation)
-            return self._get_schema(
-                inner_type, default, in_, name=name, example=example
-            )
+            return self._get_schema(inner_type, default, in_, name=name, example=example)
+        elif str(annotation).startswith("typing.Annotated"):
+            args = typing.get_args(annotation)
+            assert len(args) == 2
+            annotation = args[0]
+            constraints = args[1]
+            origin = typing.get_origin(annotation)
+
         if annotation is str:
             result = {"type": "string"}
         elif annotation is bytes:
@@ -302,6 +403,14 @@ class endpoint:
                 "type": "string",
                 "format": "date",
             }
+        elif origin is typing.Literal:
+            choices = typing.get_args(annotation)
+            types = {type(choice) for choice in choices}
+            assert len(types) == 1, f"Literal must have all the same types, but got {types}"
+            result = {
+                "type": self._get_schema(types.pop(), default=None, in_="query")["type"],
+                "enum": list(choices),
+            }
         elif origin is list:
             result = {
                 "type": "array",
@@ -316,71 +425,62 @@ class endpoint:
             if in_ == "path":
                 result["minItems"] = 1
                 result["maxItems"] = 100
-        elif origin is typing.Literal:
-            choices = typing.get_args(annotation)
-            [py_type] = {type(choice) for choice in choices}
+        elif issubclass(annotation, enum.Enum):
+            choices = list(annotation.__members__)
             result = {
-                "type": self._get_schema(py_type, default=None, in_="query")["type"],
+                "type": "string",
                 "enum": list(choices),
             }
+        elif issubclass(annotation, pydantic.BaseModel):
+            result = {
+                "type": "object",
+                "properties": {
+                    name: self._get_schema(field.annotation, field.default, "query")
+                    for name, field in annotation.model_fields.items()
+                },
+            }
+            if annotation.model_config.get("extra") == "allow":
+                result["additionalProperties"] = self._get_schema(
+                    getattr(annotation, "__extra_type__", str),
+                    None,
+                    "query",
+                )
         elif isinstance(annotation, type):
-            if issubclass(annotation, pydantic.types.ConstrainedList):
-                min_items, max_items = annotation.min_items, annotation.max_items
-                result = {
-                    "type": "array",
-                    "items": self._get_schema(
-                        annotation.item_type,
-                        default=None,
-                        in_="query",
-                        name=name,
-                        example=None,
-                    ),
-                }
-                if min_items is not None:
-                    result["minItems"] = min_items
-                if max_items is not None:
-                    result["maxItems"] = max_items
-            elif issubclass(annotation, pydantic.types.ConstrainedInt):
-                le, ge = annotation.le, annotation.ge
-                result = {
-                    "type": "integer",
-                }
-                if le is not None:
-                    result["maximum"] = le
-                if ge is not None:
-                    result["minimum"] = ge
-            elif issubclass(annotation, pydantic.types.ConstrainedStr):
-                result = {
-                    "type": "string",
-                    "pattern": annotation.regex.pattern,
-                }
-            elif issubclass(annotation, enum.Enum):
-                choices = list(annotation.__members__)
-                result = {
-                    "type": "string",
-                    "enum": list(choices),
-                }
-            elif issubclass(annotation, pydantic.BaseModel):
-                # result = {"$ref": f"#/components/schemas/{annotation.__name__}"}
-                result = {
-                    "type": "object",
-                    "properties": {
-                        name: self._get_schema(field.annotation, field.default, "query")
-                        for name, field in annotation.__fields__.items()
-                    },
-                }
-                if annotation.Config.extra.value == "allow":
-                    result["additionalProperties"] = self._get_schema(
-                        getattr(annotation, "__extra_type__", str),
-                        None,
-                        "query",
-                    )
-            else:
-                raise ValueError(f"Unknown type {annotation} of parameter {name}")
-        else:
             raise ValueError(f"Unknown type {annotation} of parameter {name}")
-        if default is not None:
+        else:
+            raise ValueError(f"Unknown annotation {annotation} of parameter {name}")
+
+        # add constraints if present
+        if constraints is None:
+            pass
+        elif isinstance(constraints, pydantic.types.StringConstraints):
+            result["pattern"] = constraints.pattern
+        elif isinstance(constraints, pydantic.fields.FieldInfo):
+            for m in constraints.metadata:
+                if isinstance(m, annotated_types.Ge):
+                    result["minimum"] = m.ge
+                elif isinstance(m, annotated_types.Le):
+                    result["maximum"] = m.le
+                elif isinstance(m, annotated_types.MaxLen):
+                    if origin is list:
+                        result["maxItems"] = m.max_length
+                    else:
+                        result["maxLength"] = m.max_length
+                elif isinstance(m, annotated_types.MinLen):
+                    if origin is list:
+                        result["minItems"] = m.min_length
+                    else:
+                        result["minLength"] = m.min_length
+                else:
+                    raise ValueError(f"Unknown constraint {m} of parameter {name}")
+        else:
+            raise ValueError(f"Unknown constraints type {type(constraints)} of parameter {name}")
+
+        # add default value if present
+        if default is not None and default is not pydantic_core.PydanticUndefined and default != "":
             result["default"] = default
+
+        # add example if present
         if example:
             result["example"] = ast.literal_eval(example)
         return result
@@ -401,9 +501,7 @@ def _parse_docstring(docstring):
     ----
     Private part 8===D
     """
-    docstring, *_private_docs = re.split(
-        r"^\s*-{4,}$", docstring, flags=re.MULTILINE, maxsplit=1
-    )
+    docstring, *_private_docs = re.split(r"^\s*-{4,}$", docstring, flags=re.MULTILINE, maxsplit=1)
     summary, *parts = re.split(r"@(\w+)", docstring)
     assert summary.startswith("\n"), "Docstrings need to break after opening quotes"
     summary = textwrap.dedent(summary)
