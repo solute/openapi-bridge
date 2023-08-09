@@ -1,6 +1,6 @@
 # openapi-bridge
 
-OpenAPI endpoint decorator with pydantic integration.
+OpenAPI endpoint decorator with pydantic (>=2.0.0) integration.
 
 Allows for almost seamless integration of pydantic models with OpenAPI,
 generating YAML for the endpoint from type hints.

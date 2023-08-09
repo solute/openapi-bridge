@@ -10,8 +10,11 @@ repository = "https://github.com/solute/openapi-bridge"
 
 [tool.poetry.dependencies]
 python = "^3.9"
-pydantic = "^1.10.7"
+pydantic = "^2.1.1"
 
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.4.0"
 
 [build-system]
 requires = ["poetry-core"]
