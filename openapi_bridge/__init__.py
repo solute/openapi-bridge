@@ -346,7 +346,7 @@ class endpoint:
             result = fn(*args, **kwargs)
             if isinstance(result, returns):
                 if isinstance(result, pydantic.BaseModel):
-                    return result.dict(by_alias=True, exclude_none=self.response_model_exclude_none), 200
+                    return result.model_dump(by_alias=True, exclude_none=self.response_model_exclude_none), 200
                 else:
                     return result, 200
             return result
