@@ -51,9 +51,9 @@ def get_pydantic_schemata(pydantic_model_module):
             _patch_dict(schema, "force", None)
             _patch_dict(schema, "default", None, filter_null=True)
             _patch_dict(schema, "$ref", _definitions_to_schemas)
+            _remove_null_type(schema)
             _flatten_single(schema, "anyOf")
             _replace_const(schema)
-            _remove_null_type(schema)
             schemata[symbol] = schema
             continue
         if str(attr) == "<enum 'Enum'>":
@@ -76,8 +76,10 @@ def _flatten_single(d, key):
             if isinstance(v, (list, dict)) and key in v:
                 if isinstance(v[key], dict):
                     d[k].update(v[key])
-                else:
+                elif len(v[key]) == 1:
                     d[k].update(v[key][0])
+                else:
+                    continue
                 d[k].pop(key, None)
 
             elif isinstance(v, (dict, list)):
