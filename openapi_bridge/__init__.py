@@ -106,7 +106,7 @@ def _replace_const(d):
 
 
 def _patch_dict(d, key, transform, filter_null=False):
-    if isinstance(d, dict):
+    if isinstance(d, dict):  # noqa:PLR1702 (too-many-nested-blocks)
         for k, v in list(d.items()):  # so we can pop
             if isinstance(v, (dict, list)):
                 _patch_dict(v, key, transform)
@@ -156,6 +156,13 @@ class endpoint:
     Allows for almost seamless integration of pydantic models with OpenAPI,
     generating YAML for the endpoint from type hints.
 
+    # Parameters
+
+    - method: HTTP verb, defaults to "get"
+    - path_prefix: The optional prefix, to support multiple APIs (e.g. internal vs. external).
+    - security: A custom security, defaults to basic auth
+    - response_model_exclude_none: Whether to remove Nones from the response (defaults to False)
+    - deprecated: Whether to mark this endpoint as deprecated
 
     # Collecting Endpoint Information
 
@@ -247,16 +254,19 @@ class endpoint:
     def __init__(
         self,
         path,
+        *,
         method="get",
         path_prefix="default",
         security=None,
         response_model_exclude_none=False,
+        deprecated=False,
     ):
         self.path = path
         self.method = method.lower()
         self.path_prefix = path_prefix
         self.security = security if security is not None else endpoint.SECURITY_BASIC
         self.response_model_exclude_none = response_model_exclude_none
+        self.deprecated = deprecated
 
     def __call__(self, fn):
         parameters = []
@@ -322,9 +332,7 @@ class endpoint:
                 request_body["content"]["multipart/form-data"]["schema"]["properties"][arg] = {"description": docs["param"][arg], **param["schema"]}
             else:
                 parameters.append(param)
-        PATHS.setdefault(self.path_prefix, {}).setdefault(self.path, {})[
-            self.method
-        ] = {
+        endpoint_config = {
             "parameters": parameters,
             "summary": summary,
             "description": description,
@@ -342,6 +350,11 @@ class endpoint:
             **self.security,
             **({"requestBody": request_body} if request_body else {}),
         }
+        if self.deprecated:
+            endpoint_config["deprecated"] = True
+        PATHS.setdefault(self.path_prefix, {}).setdefault(self.path, {})[
+            self.method
+        ] = endpoint_config
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
@@ -355,7 +368,7 @@ class endpoint:
 
         return wrapper
 
-    def _get_schema(self, annotation, default, in_, name=None, example=None):
+    def _get_schema(self, annotation, default, in_, name=None, example=None):  # noqa:PLR0912 (too-many-branches)
         constraints = None
         origin = typing.get_origin(annotation)
         if str(annotation).startswith("typing.Optional"):
