@@ -310,14 +310,14 @@ class endpoint:
                     param["explode"] = True
                     param["style"] = "deepObject"
 
-            if arg == "body" and self.method == "post":
+            if arg == "body" and self.method in ("post", "patch"):
                 request_body = {
                     "content": {
                         "application/json": {"schema": param["schema"]},
                     },
                     "description": docs["param"][arg],
                 }
-            elif annotation in (bytes, typing.Optional[bytes]) and self.method == "post":
+            elif annotation in (bytes, typing.Optional[bytes]) and self.method in ("post", "patch"):
                 if not request_body:
                     request_body = {
                         "content": {
