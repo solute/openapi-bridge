@@ -281,6 +281,9 @@ class endpoint:
         assert docs["response"].get("200") or issubclass(returns, pydantic.BaseModel), "if you don't return a pydantic model, you need to document the @response 200"
         return_reference = f"#/components/schemas/{returns.__name__}"
         for arg in spec.kwonlyargs:
+            if arg.startswith("_"):
+                # skip underscore-prefixed arguments — those are private
+                continue
             annotation = spec.annotations[arg]
             in_ = "path" if f"{{{arg}}}" in self.path else "query"
             assert arg in docs["param"], f"Undescribed parameter in {fqname}: {arg}"
