@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "openapi-bridge"
-version = "0.4.2"
+version = "0.5.0"
 description = ""
 authors = ["Patrick Schemitz <ps@solute.de>", "Jonathan Oberländer <jo@solute.de>"]
 readme = "README.md"
