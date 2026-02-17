@@ -11,6 +11,7 @@ import typing
 from itertools import zip_longest
 
 import annotated_types
+import flask
 import pydantic
 import pydantic_core
 
@@ -362,7 +363,9 @@ class endpoint:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             result = fn(*args, **kwargs)
-            if isinstance(result, returns):
+            if isinstance(result, flask.Response):
+                return result
+            elif isinstance(result, returns):
                 if isinstance(result, pydantic.BaseModel):
                     return result.model_dump(by_alias=True, exclude_none=self.response_model_exclude_none), 200
                 else:
